@@ -626,11 +626,16 @@ const CREDENTIAL_ERROR_CODES = new Set([
     "INVALID_CREDENTIALS",
 ]);
 
-// The missing re-verify button of issue #274. OAuth mailboxes re-run the
-// provider consent in a popup; SMTP/IMAP mailboxes get a replacement-
-// credentials dialog. Either way the backend renews the stored credential,
-// clears the error, and reactivates the mailbox.
-function ReconnectAction({ mailbox }: { mailbox: Inbox }) {
+// Provider gmail is the OAuth transport. Delegated and password sign-in renew another way.
+function isGoogleOAuthMailbox(mailbox: Pick<Inbox, "provider" | "auth_method">): boolean {
+    return mailbox.provider === "gmail"
+        && mailbox.auth_method !== "delegated"
+        && mailbox.auth_method !== "app_password"
+        && mailbox.auth_method !== "password";
+}
+
+// Alert sits on a credential error; quiet is the standing Google consent action.
+function ReconnectAction({ mailbox, tone = "alert" }: { mailbox: Inbox; tone?: "alert" | "quiet" }) {
     const qc = useQueryClient();
     const [busy, setBusy] = useState(false);
     const [credsOpen, setCredsOpen] = useState(false);
@@ -653,14 +658,18 @@ function ReconnectAction({ mailbox }: { mailbox: Inbox }) {
         }
     };
 
+    const buttonClass = tone === "quiet"
+        ? "h-7 px-2.5 shrink-0 rounded-md bg-sky-600 hover:bg-sky-700 text-white text-[12px] font-medium inline-flex items-center gap-1.5 transition-colors disabled:opacity-60"
+        : "h-7 px-2.5 rounded-md bg-rose-600 hover:bg-rose-700 text-white text-[12px] font-medium inline-flex items-center gap-1.5 transition-colors disabled:opacity-60";
+
     return (
-        <div className="mt-2">
+        <div className={tone === "quiet" ? "shrink-0" : "mt-2"}>
             {oauth ? (
                 <button
                     type="button"
                     onClick={() => void reauth()}
                     disabled={busy}
-                    className="h-7 px-2.5 rounded-md bg-rose-600 hover:bg-rose-700 text-white text-[12px] font-medium inline-flex items-center gap-1.5 transition-colors disabled:opacity-60"
+                    className={buttonClass}
                 >
                     {busy ? <Loading className="!w-3 h-3 text-white" /> : <ShieldCheckIcon className="w-3 h-3" />}
                     {busy ? "Waiting for authorization…" : `Re-authorize with ${providerLabel}`}
@@ -681,6 +690,24 @@ function ReconnectAction({ mailbox }: { mailbox: Inbox }) {
                 open={credsOpen}
                 onClose={() => setCredsOpen(false)}
             />
+        </div>
+    );
+}
+
+// Same Google consent as the error-state button, offered before a credential failure.
+function GoogleReauthSection({ mailbox }: { mailbox: Inbox }) {
+    return (
+        <div className="px-5 py-5 space-y-3">
+            <Eyebrow>Google sign-in</Eyebrow>
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:gap-4">
+                <div className="min-w-0 flex-1">
+                    <div className="text-[12.5px] font-medium text-slate-900">Renew Google access</div>
+                    <div className="text-[11px] text-slate-400 leading-relaxed">
+                        Re-runs Google consent and replaces the stored token. The mailbox, its mail and its settings stay.
+                    </div>
+                </div>
+                <ReconnectAction mailbox={mailbox} tone="quiet" />
+            </div>
         </div>
     );
 }
@@ -764,6 +791,7 @@ function OverviewTab({ status, loading, mailbox, warmup, warmupState, onOpenSign
     // One reconnect button per drawer, on the first credential-class error;
     // every such error is fixed by the same reconnect.
     const firstCredentialErrorId = status?.errors?.find((e) => CREDENTIAL_ERROR_CODES.has(e.error_code))?.id;
+    const credentialReconnectShown = !!firstCredentialErrorId || status?.send_recovery_reason === "authentication" || !!status?.send_pause;
 
     const synced = mailbox.last_synced_at ? new Date(mailbox.last_synced_at) : null;
 
@@ -771,6 +799,7 @@ function OverviewTab({ status, loading, mailbox, warmup, warmupState, onOpenSign
         <div className="divide-y divide-slate-200/60">
             {mailbox.status === "inactive" && <SwitchedOffNotice mailbox={mailbox} />}
             <SigninPrompt mailbox={mailbox} onOpen={onOpenSignin} />
+            {isGoogleOAuthMailbox(mailbox) && !credentialReconnectShown && <GoogleReauthSection mailbox={mailbox} />}
             {/* Whatever the Advisor has on this mailbox, above the numbers that
                 produced it. This is where a row flag and a deep link both land. */}
             <AdvisorStrip
@@ -2410,6 +2439,7 @@ function SettingsTab({ form, update, mailbox, onDisconnected }: { form: Inbox; u
     );
     return (
         <div className="divide-y divide-slate-200/60">
+            {isGoogleOAuthMailbox(mailbox) && <GoogleReauthSection mailbox={mailbox} />}
             <MailboxSigninSection mailbox={mailbox} />
             <div className="px-5 py-5 space-y-4">
                 <Eyebrow>Sender profile</Eyebrow>
